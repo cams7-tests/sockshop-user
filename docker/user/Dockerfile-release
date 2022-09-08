@@ -1,38 +1,41 @@
-FROM golang:1.15.15-alpine3.14
+FROM golang:1.19.0-alpine3.16
 
-COPY . /go/src/github.com/microservices-demo/user/
-WORKDIR /go/src/github.com/microservices-demo/user/
+COPY . /go/src/github.com/microservices-demo/user
+WORKDIR /go/src/github.com/microservices-demo/user
 
-RUN apk update && apk add --no-cache git
-RUN git config --global http.sslVerify false
-RUN rm -f /go/src/github.com/microservices-demo/user/go.mod
+RUN apk update && apk add --no-cache gcc libc-dev
 RUN rm -f /go/src/github.com/microservices-demo/user/go.sum
-RUN go get -v github.com/Masterminds/glide 
-RUN glide install && CGO_ENABLED=0 go build -a -installsuffix cgo -o /user main.go
+RUN go mod tidy && go mod vendor
 
-FROM alpine:3.14
+RUN cd /go/src/github.com/microservices-demo/user/users && go test
+RUN cd /go/src/github.com/microservices-demo/user/api && go test
+RUN cd /go/src/github.com/microservices-demo/user/db && go test
+RUN cd /go/src/github.com/microservices-demo/user/db/mongodb && go test
 
-#ENV	SERVICE_USER=myuser \
-#	SERVICE_UID=10001 \
-#	SERVICE_GROUP=mygroup \
-#	SERVICE_GID=10001
+RUN cd /go/src/github.com/microservices-demo/user && go install
 
-#RUN	addgroup -g ${SERVICE_GID} ${SERVICE_GROUP} && \
-#	adduser -g "${SERVICE_NAME} user" -D -H -G ${SERVICE_GROUP} -s /sbin/nologin -u ${SERVICE_UID} ${SERVICE_USER} && \
-#	apk add --update libcap
+FROM alpine:3.16
+
+WORKDIR /
+EXPOSE 80
+COPY --from=0 /go/bin/user /app
+
+ARG BUILD_DATE
+ARG BUILD_VERSION
+ARG COMMIT
+
+LABEL org.label-schema.vendor="Weaveworks" \
+  org.label-schema.build-date="${BUILD_DATE}" \
+  org.label-schema.version="${BUILD_VERSION}" \
+  org.label-schema.name="Socks Shop: Payment" \
+  org.label-schema.description="REST API for User service" \
+  org.label-schema.url="https://github.com/cams7-tests/sockshop-user" \
+  org.label-schema.vcs-url="github.com/cams7-tests/sockshop-user.git" \
+  org.label-schema.vcs-ref="${COMMIT}" \
+  org.label-schema.schema-version="1.0.0"
 
 ENV HATEAOS user
 ENV USER_DATABASE mongodb
 ENV MONGO_HOST user-db
 
-WORKDIR /
-EXPOSE 80
-COPY --from=0 /user /
-
-#RUN	chmod +x /user && \
-#	chown -R ${SERVICE_USER}:${SERVICE_GROUP} /user && \
-#	setcap 'cap_net_bind_service=+ep' /user
-
-#USER ${SERVICE_USER}
-
-CMD ["/user", "-port=80"]
+CMD ["/app", "-port=80"]
