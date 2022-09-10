@@ -1,18 +1,16 @@
 FROM golang:1.19.0-alpine3.16
 
-COPY . /go/src/github.com/microservices-demo/user
-WORKDIR /go/src/github.com/microservices-demo/user
+COPY . $GOPATH/src/github.com/microservices-demo/user
+WORKDIR $GOPATH/src/github.com/microservices-demo/user
 
 RUN apk update && apk add --no-cache gcc libc-dev
-RUN rm -f /go/src/github.com/microservices-demo/user/go.sum
-RUN go mod tidy && go mod vendor
 
-RUN cd /go/src/github.com/microservices-demo/user/users && go test
-RUN cd /go/src/github.com/microservices-demo/user/api && go test
-RUN cd /go/src/github.com/microservices-demo/user/db && go test
-RUN cd /go/src/github.com/microservices-demo/user/db/mongodb && go test
+RUN cd $GOPATH/src/github.com/microservices-demo/user/users && go test
+RUN cd $GOPATH/src/github.com/microservices-demo/user/api && go test
+RUN cd $GOPATH/src/github.com/microservices-demo/user/db && go test
+RUN cd $GOPATH/src/github.com/microservices-demo/user/db/mongodb && go test
 
-RUN cd /go/src/github.com/microservices-demo/user && go install
+RUN cd $GOPATH/src/github.com/microservices-demo/user && go install
 
 FROM alpine:3.16
 
@@ -32,10 +30,10 @@ LABEL org.label-schema.vendor="Weaveworks" \
   org.label-schema.url="https://github.com/cams7-tests/sockshop-user" \
   org.label-schema.vcs-url="github.com/cams7-tests/sockshop-user.git" \
   org.label-schema.vcs-ref="${COMMIT}" \
-  org.label-schema.schema-version="1.0.0"
+  org.label-schema.schema-version="1.0.1"
 
 ENV HATEAOS user
 ENV USER_DATABASE mongodb
-ENV MONGO_HOST user-db
+ENV MONGODB_CONNECTION_STRING mongodb://user-db:27017
 
 CMD ["/app", "-port=80"]

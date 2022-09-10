@@ -1,5 +1,4 @@
-bin
-docker/user/bin
 vendor
 go.sum
 .history/
+__debug_bin
