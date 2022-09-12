@@ -2,7 +2,6 @@ package mongodb
 
 import (
 	"flag"
-	"fmt"
 
 	"context"
 	"os"
@@ -111,68 +110,71 @@ func (m *Mongo) CreateUser(user *users.User) error {
 	mu := New()
 	mu.User = *user
 	mu.ID = id
-	var carderr error
-	var addrerr error
-	mu.CardIDs, carderr = m.createCards(user.Cards)
-	mu.AddressIDs, addrerr = m.createAddresses(user.Addresses)
-	collection := m.Client.Database(mongoDatabase).Collection("customers")
-	_, err := collection.InsertOne(context.Background(), mu)
+
+	var err error
+	mu.CardIDs, err = m.createCards(user.Cards)
 	if err != nil {
-		// Gonna clean up if we can, ignore error
-		// because the user save error takes precedence.
-		m.cleanAttributes(mu)
+		return err
+	}
+
+	mu.AddressIDs, err = m.createAddresses(user.Addresses)
+	if err != nil {
+		return err
+	}
+
+	collection := m.Client.Database(mongoDatabase).Collection("customers")
+	_, err = collection.InsertOne(context.Background(), mu)
+	if err != nil {
 		return err
 	}
 	mu.User.UserID = mu.ID.Hex()
-	// Cheap err for attributes
-	if carderr != nil || addrerr != nil {
-		return fmt.Errorf("%v %v", carderr, addrerr)
-	}
 	*user = mu.User
 	return nil
 }
 
 func (m *Mongo) createCards(cards []users.Card) ([]primitive.ObjectID, error) {
 	ids := make([]primitive.ObjectID, 0)
-	for k, card := range cards {
+	for i, card := range cards {
 		id := primitive.NewObjectID()
 		mc := MongoCard{Card: card, ID: id}
 		collection := m.Client.Database(mongoDatabase).Collection("cards")
 		_, err := collection.InsertOne(context.Background(), mc)
 		if err != nil {
+			m.cleanCardsAttr(ids)
 			return ids, err
 		}
 		ids = append(ids, id)
-		cards[k].ID = id.Hex()
+		cards[i].ID = id.Hex()
 	}
 	return ids, nil
 }
 
 func (m *Mongo) createAddresses(addresses []users.Address) ([]primitive.ObjectID, error) {
 	ids := make([]primitive.ObjectID, 0)
-	for k, address := range addresses {
+	for i, address := range addresses {
 		id := primitive.NewObjectID()
 		ma := MongoAddress{Address: address, ID: id}
 		collection := m.Client.Database(mongoDatabase).Collection("addresses")
 		_, err := collection.InsertOne(context.Background(), ma)
 		if err != nil {
+			m.cleanAddressesAttr(ids)
 			return ids, err
 		}
 		ids = append(ids, id)
-		addresses[k].ID = id.Hex()
+		addresses[i].ID = id.Hex()
 	}
 	return ids, nil
 }
 
-func (m *Mongo) cleanAttributes(mu MongoUser) error {
+func (m *Mongo) cleanAddressesAttr(addressesIds []primitive.ObjectID) error {
 	collection := m.Client.Database(mongoDatabase).Collection("addresses")
-	_, err := collection.DeleteMany(context.Background(), bson.M{"_id": bson.M{"$in": mu.AddressIDs}})
-	if err != nil {
-		return err
-	}
+	_, err := collection.DeleteMany(context.Background(), bson.M{"_id": bson.M{"$in": addressesIds}})
+	return err
+}
 
-	collection = m.Client.Database(mongoDatabase).Collection("cards")
-	_, err = collection.DeleteMany(context.Background(), bson.M{"_id": bson.M{"$in": mu.CardIDs}})
+func (m *Mongo) cleanCardsAttr(cardIds []primitive.ObjectID) error {
+	collection := m.Client.Database(mongoDatabase).Collection("cards")
+	_, err := collection.DeleteMany(context.Background(), bson.M{"_id": bson.M{"$in": cardIds}})
 	return err
 }
 
@@ -183,7 +185,6 @@ func (m *Mongo) appendAttributeId(attr string, attrId primitive.ObjectID, userId
 	}
 
 	collection := m.Client.Database(mongoDatabase).Collection("customers")
-
 	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": bson.M{"$eq": id}}, bson.M{"$addToSet": bson.M{attr: attrId}})
 	return err
 }
@@ -195,7 +196,6 @@ func (m *Mongo) removeAttributeId(attr string, attrId primitive.ObjectID, userId
 	}
 
 	collection := m.Client.Database(mongoDatabase).Collection("customers")
-
 	_, err = collection.UpdateOne(context.Background(), bson.M{"_id": bson.M{"$eq": id}}, bson.M{"$pull": bson.M{attr: attrId}})
 	return err
 }
@@ -237,21 +237,20 @@ func (m *Mongo) GetUsers() ([]users.User, error) {
 	if err != nil {
 		return []users.User{}, err
 	}
+	defer cur.Close(context.Background())
 
 	us := make([]users.User, 0)
 	for cur.Next(context.Background()) {
 		var mu MongoUser
-		decodeErr := cur.Decode(&mu)
-		if decodeErr != nil {
-			err = decodeErr
-			break
+		err := cur.Decode(&mu)
+		if err != nil {
+			return []users.User{}, err
 		}
 		mu.AddUserIDs()
 		us = append(us, mu.User)
 	}
-	cur.Close(context.Background())
 
-	return us, err
+	return us, nil
 }
 
 // GetUserAttributes given a user, load all cards and addresses connected to that user
@@ -267,26 +266,24 @@ func (m *Mongo) GetUserAttributes(user *users.User) error {
 		}
 		ids = append(ids, addressId)
 	}
+
 	collection := m.Client.Database(mongoDatabase).Collection("addresses")
 	cur, err := collection.Find(context.Background(), bson.M{"_id": bson.M{"$in": ids}}, findOptions)
 	if err != nil {
 		return err
 	}
+	defer cur.Close(context.Background())
+
 	addresses := make([]users.Address, 0)
 	for cur.Next(context.Background()) {
 		var ma MongoAddress
-		decodeErr := cur.Decode(&ma)
-		if decodeErr != nil {
-			err = decodeErr
-			break
+		err := cur.Decode(&ma)
+		if err != nil {
+			return err
 		}
 		ma.Address.ID = ma.ID.Hex()
 		addresses = append(addresses, ma.Address)
-	}
-	cur.Close(context.Background())
-	if err != nil {
-		return err
-	}
+	}	
 	user.Addresses = addresses
 
 	ids = make([]primitive.ObjectID, 0)
@@ -297,27 +294,26 @@ func (m *Mongo) GetUserAttributes(user *users.User) error {
 		}
 		ids = append(ids, cardId)
 	}
+
 	collection = m.Client.Database(mongoDatabase).Collection("cards")
 	cur, err = collection.Find(context.Background(), bson.M{"_id": bson.M{"$in": ids}}, findOptions)
 	if err != nil {
 		return err
 	}
+	defer cur.Close(context.Background())
+
 	cards := make([]users.Card, 0)
 	for cur.Next(context.Background()) {
 		var mc MongoCard
-		decodeErr := cur.Decode(&mc)
-		if decodeErr != nil {
-			err = decodeErr
-			break
+		err := cur.Decode(&mc)
+		if err != nil {
+			return err
 		}
 		mc.Card.ID = mc.ID.Hex()
 		cards = append(cards, mc.Card)
 	}
-	cur.Close(context.Background())
-	if err != nil {
-		return err
-	}
 	user.Cards = cards
+
 	return nil
 }
 
@@ -347,21 +343,20 @@ func (m *Mongo) GetCards() ([]users.Card, error) {
 	if err != nil {
 		return []users.Card{}, err
 	}
+	defer cur.Close(context.Background())
 
 	cards := make([]users.Card, 0)
 	for cur.Next(context.Background()) {
 		var mc MongoCard
-		decodeErr := cur.Decode(&mc)
-		if decodeErr != nil {
-			err = decodeErr
-			break
+		err := cur.Decode(&mc)
+		if err != nil {
+			return []users.Card{}, err
 		}
 		mc.AddID()
 		cards = append(cards, mc.Card)
 	}
-	cur.Close(context.Background())
 
-	return cards, err
+	return cards, nil
 }
 
 // CreateCard adds card to MongoDB
@@ -413,21 +408,20 @@ func (m *Mongo) GetAddresses() ([]users.Address, error) {
 	if err != nil {
 		return []users.Address{}, err
 	}
+	defer cur.Close(context.Background())
 
 	addresses := make([]users.Address, 0)
 	for cur.Next(context.Background()) {
 		var ma MongoAddress
-		decodeErr := cur.Decode(&ma)
-		if decodeErr != nil {
-			err = decodeErr
-			break
+		err := cur.Decode(&ma)
+		if err != nil {
+			return []users.Address{}, err
 		}
 		ma.AddID()
 		addresses = append(addresses, ma.Address)
 	}
-	cur.Close(context.Background())
 
-	return addresses, err
+	return addresses, nil
 }
 
 // CreateAddress Inserts Address into MongoDB
@@ -494,7 +488,7 @@ func (m *Mongo) Delete(collectionName, id string) error {
 			return err
 		}
 
-		collection := m.Client.Database(mongoDatabase).Collection(collectionName)
+		collection := m.Client.Database(mongoDatabase).Collection("customers")
 		_, err = collection.UpdateMany(context.Background(), bson.M{}, bson.M{"$pull": bson.M{collectionName: collectionId}})
 		if err != nil {
 			return err
